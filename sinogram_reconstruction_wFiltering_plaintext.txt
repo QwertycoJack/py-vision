@@ -1,0 +1,124 @@
+# RGB Colour Image Reconstruction from a multi-channel Sinogram
+# Ingar Filinn 2019
+# N.B - Part of this script creates a temporary file in the working directory
+# The input image filename used here is "sinogram.png"
+
+from PIL import Image
+import imutils
+import scipy.misc
+import numpy as np
+import scipy.fftpack as fft
+from skimage.transform import rotate
+import os
+
+# Import the input Sinogram as an Image object and print type and size
+im_1 = Image.open("sinogram.png")
+print(im_1.format, im_1.size, im_1.mode)
+# Image can be shown if needed for de-bugging
+# im_1.show()
+
+# Split colour image into RGB channels
+r, g, b = im_1.split()
+# Save each channel to a temporary location in the working directory
+r.save('red_band.png')
+g.save('green_band.png')
+b.save('blue_band.png')
+# Load each channel as a grey-scale image object
+Red = imutils.imread("red_band.png", greyscale=True)
+Green = imutils.imread("green_band.png", greyscale=True)
+Blue = imutils.imread("blue_band.png", greyscale=True)
+
+# Functions...
+
+
+def construct_laminogram(InputRadon):
+    # Build a Laminogram from a Sum of the Image Back-projections
+    laminogram = np.zeros((InputRadon.shape[1], InputRadon.shape[1]))
+    dTheta = 180.0 / InputRadon.shape[0]
+    for i in range(InputRadon.shape[0]):
+        temp = np.tile(InputRadon[i], (InputRadon.shape[1], 1))
+        temp = rotate(temp, dTheta*i)
+        laminogram += temp
+    return laminogram
+
+
+def construct_projections(image, steps):
+    # Not Used when a Sinogram already exists as an Input Image
+    # Assemble a Radon Transform using 'steps' number of image projections
+    projections = []
+    theta = -180.0/steps
+
+    for i in range(steps):
+        projections.append(rotate(image, i*theta).sum(axis=0))
+    return np.vstack(projections)
+
+
+def assemble_fft(pros):
+    # Create 1Dim FFT's of an array of projections per row of array
+    # This translates projections to the Frequency Domain as a Fast Fourier Transform
+    return fft.rfft(pros, axis=1)
+
+
+def ramp_filter(ffts):
+    # Ramp Filter for a 2Dim Array of FFT's from Input Sinogram
+    # This Ramp Filter is Hamming-Windowed to reduce 'ringing' artifacts
+    ramp = np.floor(np.arange(0.5, ffts.shape[1]//2 + 0.1, 0.5))
+    # Create a Hamming Window Filter that is 3 times the size of the image
+    # A window the exact same size as the Image results in some colour loss
+    hamming = np.hamming(ffts.shape[1]*3)
+    # Reduce the Window size now to match the size of the input image
+    hamming_trimmed = hamming[ffts.shape[1]:]
+    # Multiply ramp by re-sized Hamming Window, then by FFT's
+    return ffts*(ramp*hamming_trimmed)
+
+
+def delete_files(file):
+    # simple file delete function for temp images in directory(optional - Not used)
+    os.remove(file)
+    print('Temporary Files Removed')
+
+
+# Transform Sinogram to Frequency Domain using FFT routine
+Red_FFT = assemble_fft(Red)
+Green_FFT = assemble_fft(Green)
+Blue_FFT = assemble_fft(Blue)
+
+# Apply Ramp Filter to each Channel while in the Frequency Domain
+print('Filtering...')
+Red_Rp = ramp_filter(Red_FFT)
+Green_Rp = ramp_filter(Green_FFT)
+Blue_Rp = ramp_filter(Blue_FFT)
+
+# Transform filtered channels back to spatial domain
+Red_Inv = fft.irfft(Red_Rp, axis=1)
+Green_Inv = fft.irfft(Green_Rp, axis=1)
+Blue_Inv = fft.irfft(Blue_Rp, axis=1)
+
+# Assemble image from back-projections separately for each channel
+print('Constructing Laminogram 1')
+R_back = construct_laminogram(Red_Inv)
+print('Constructing Laminogram 2')
+G_back = construct_laminogram(Green_Inv)
+print('Constructing Laminogram 3')
+B_back = construct_laminogram(Blue_Inv)
+
+# Save each channel as a temporary image in working directory
+scipy.misc.imsave('red_ramp_hm_filtered.png', R_back)
+scipy.misc.imsave('green_ramp_hm_filtered.png', G_back)
+scipy.misc.imsave('blue_ramp_hm_filtered.png', B_back)
+print('Files Saved')
+
+# Open and Merge each colour channel into one composite image
+R = Image.open("red_ramp_hm_filtered.png")
+G = Image.open("green_ramp_hm_filtered.png")
+B = Image.open("blue_ramp_hm_filtered.png")
+Image_3 = Image.merge("RGB", (R, G, B))
+# Save image in working directory as final output
+Image_3.save('Merged_Image_3.png')
+
+# Delete temp files made earlier to save disk space(if so desired)
+# delete_files('red_ramp_hm_filtered.png')
+# delete_files('green_ramp_hm_filtered.png')
+# delete_files('blue_ramp_hm_filtered.png')
+
+print('End')
